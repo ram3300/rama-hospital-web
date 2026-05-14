@@ -8,50 +8,63 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 function App() {
   const [nomor, setNomor] = useState("A-00");
-  const [terlewat, setTerlewat] = useState("-"); // State baru untuk nomor terlewat
+  const [terlewat, setTerlewat] = useState("-");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. Ambil data awal (termasuk kolom nomor_terlewat)
+    // 1. Fungsi ambil data awal
     const fetchAntrean = async () => {
-  try {
-    let { data, error } = await supabase
-      .from('antrean_rs')
-      .select('*') 
-      .eq('id', 1)
-      .single();
-    
-    if (data) {
-      console.log("Data utuh dari Supabase:", data); // Cek di console log f12
-      setNomor(data.nomor_sekarang); 
-      // Paksa ambil nama kolom sesuai di image_85711a.png
-      setTerlewat(data["nomor_terlewat"] || "-"); 
-    }
-    if (error) {
-      console.error("Error fetching detail:", error);
-    }
-  } finally {
-    setLoading(false);
-  }
-};
+      try {
+        const { data, error } = await supabase
+          .from('antrean_rs')
+          .select('nomor_sekarang, nomor_terlewat')
+          .eq('id', 1)
+          .single();
+
+        if (data) {
+          console.log("Data awal berhasil ditarik:", data);
+          setNomor(data.nomor_sekarang || "A-00");
+          // Gunakan fallback "-" jika datanya NULL
+          setTerlewat(data.nomor_terlewat || "-");
+        }
+        if (error) throw error;
+      } catch (err) {
+        console.error("Gagal mengambil data:", err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
 
     fetchAntrean();
 
-    // 2. REALTIME: Pantau perubahan pada kolom nomor_sekarang dan nomor_terlewat
-  const channel = supabase
-  .channel('realtime-hp')
-  .on('postgres_changes', 
-    { event: 'UPDATE', schema: 'public', table: 'antrean_rs', filter: 'id=eq.1' }, 
-    (payload) => {
-      console.log("Payload diterima:", payload.new);
-      setNomor(payload.new.nomor_sekarang);
-      // Menggunakan cara akses array untuk memastikan kolom terbaca
-      setTerlewat(payload.new["nomor_terlewat"] || "-"); 
-    }
-  )
-  .subscribe();
+    // 2. Setup Realtime Channel
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'antrean_rs',
+          filter: 'id=eq.1',
+        },
+        (payload) => {
+          console.log("Update Terdeteksi:", payload.new);
+          // Pastikan state diupdate sesuai kolom baru
+          if (payload.new.nomor_sekarang) setNomor(payload.new.nomor_sekarang);
+          
+          // Logika khusus untuk nomor_terlewat
+          const valTerlewat = payload.new.nomor_terlewat;
+          setTerlewat(valTerlewat && valTerlewat !== "" ? valTerlewat : "-");
+        }
+      )
+      .subscribe((status) => {
+        console.log("Status Realtime:", status);
+      });
 
-    return () => supabase.removeChannel(channel);
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   return (
@@ -65,10 +78,12 @@ function App() {
         <p style={styles.label}>NOMOR SEKARANG</p>
         <h1 style={styles.number}>{loading ? "..." : nomor}</h1>
         
-        {/* Tampilan Nomor Terlewat */}
+        {/* Box Nomor Terlewat */}
         <div style={styles.terlewatBox}>
           <p style={styles.terlewatLabel}>TERLEWAT</p>
-          <p style={styles.terlewatNumber}>{loading ? "..." : terlewat}</p>
+          <p style={styles.terlewatNumber}>
+            {loading ? "..." : terlewat}
+          </p>
         </div>
 
         <div style={styles.statusBox}>
@@ -85,6 +100,7 @@ function App() {
   );
 }
 
+// Styles tetap sama seperti sebelumnya karena sudah bagus
 const styles = {
   container: {
     backgroundColor: '#0f172a',
@@ -112,10 +128,8 @@ const styles = {
   },
   label: { fontSize: '14px', fontWeight: '600', color: '#94a3b8', marginBottom: '5px' },
   number: { fontSize: '80px', fontWeight: '900', margin: '0 0 10px 0', color: '#38bdf8' },
-  
-  // Gaya untuk Box Nomor Terlewat
   terlewatBox: {
-    backgroundColor: 'rgba(244, 63, 94, 0.1)', // Merah transparan
+    backgroundColor: 'rgba(244, 63, 94, 0.1)',
     padding: '15px',
     borderRadius: '15px',
     border: '1px dashed #f43f5e',
@@ -123,7 +137,6 @@ const styles = {
   },
   terlewatLabel: { fontSize: '12px', fontWeight: 'bold', color: '#f43f5e', margin: '0 0 5px 0' },
   terlewatNumber: { fontSize: '24px', fontWeight: '800', color: '#f43f5e', margin: 0 },
-
   statusBox: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' },
   statusText: { fontSize: '12px', color: '#38bdf8', fontWeight: '500' },
   pulse: {
