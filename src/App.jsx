@@ -14,40 +14,42 @@ function App() {
   useEffect(() => {
     // 1. Ambil data awal (termasuk kolom nomor_terlewat)
     const fetchAntrean = async () => {
-      try {
-        let { data, error } = await supabase
-          .from('antrean_rs')
-          .select('*') 
-          .eq('id', 1)
-          .single();
-        
-        if (data) {
-          console.log("Data berhasil diambil:", data);
-          setNomor(data.nomor_sekarang); 
-          setTerlewat(data.nomor_terlewat || "-"); // Set nomor terlewat
-        }
-        if (error) {
-          console.error("Error fetching detail:", error);
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
+  try {
+    let { data, error } = await supabase
+      .from('antrean_rs')
+      .select('*') 
+      .eq('id', 1)
+      .single();
+    
+    if (data) {
+      console.log("Data utuh dari Supabase:", data); // Cek di console log f12
+      setNomor(data.nomor_sekarang); 
+      // Paksa ambil nama kolom sesuai di image_85711a.png
+      setTerlewat(data["nomor_terlewat"] || "-"); 
+    }
+    if (error) {
+      console.error("Error fetching detail:", error);
+    }
+  } finally {
+    setLoading(false);
+  }
+};
 
     fetchAntrean();
 
     // 2. REALTIME: Pantau perubahan pada kolom nomor_sekarang dan nomor_terlewat
-    const channel = supabase
-      .channel('realtime-hp')
-      .on('postgres_changes', 
-        { event: 'UPDATE', schema: 'public', table: 'antrean_rs', filter: 'id=eq.1' }, 
-        (payload) => {
-          console.log("Update diterima:", payload.new);
-          setNomor(payload.new.nomor_sekarang);
-          setTerlewat(payload.new.nomor_terlewat || "-"); // Update otomatis saat berubah
-        }
-      )
-      .subscribe();
+  const channel = supabase
+  .channel('realtime-hp')
+  .on('postgres_changes', 
+    { event: 'UPDATE', schema: 'public', table: 'antrean_rs', filter: 'id=eq.1' }, 
+    (payload) => {
+      console.log("Payload diterima:", payload.new);
+      setNomor(payload.new.nomor_sekarang);
+      // Menggunakan cara akses array untuk memastikan kolom terbaca
+      setTerlewat(payload.new["nomor_terlewat"] || "-"); 
+    }
+  )
+  .subscribe();
 
     return () => supabase.removeChannel(channel);
   }, []);
