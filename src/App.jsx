@@ -8,11 +8,16 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 function App() {
   const [nomor, setNomor] = useState("A-00");
-  const [terlewat, setTerlewat] = useState("-");
+  const [terlewatList, setTerlewatList] = useState([]); // State array untuk menampung list terlewat
   const [loading, setLoading] = useState(true);
 
+  // Deteksi apakah ini halaman Admin atau halaman Monitor berdasarkan URL
+  // Jika buka url biasa (localhost:5173 atau vercel) = Monitor
+  // Jika buka url ditambah /admin (localhost:5173/#admin atau lewat parameter) = Admin
+  const isAdmin = window.location.hash === '#admin' || window.location.pathname.includes('admin');
+
   useEffect(() => {
-    // 1. Fungsi ambil data awal
+    // 1. Ambil data awal dari Supabase
     const fetchAntrean = async () => {
       try {
         const { data, error } = await supabase
@@ -22,10 +27,9 @@ function App() {
           .single();
 
         if (data) {
-          console.log("Data awal berhasil ditarik:", data);
           setNomor(data.nomor_sekarang || "A-00");
-          // Gunakan fallback "-" jika datanya NULL
-          setTerlewat(data.nomor_terlewat || "-");
+          // Pastikan data terlewat dibaca sebagai array jsonb
+          setTerlewatList(Array.isArray(data.nomor_terlewat) ? data.nomor_terlewat : []);
         }
         if (error) throw error;
       } catch (err) {
@@ -37,36 +41,111 @@ function App() {
 
     fetchAntrean();
 
-    // 2. Setup Realtime Channel
+    // 2. REALTIME: Pantau perubahan database secara langsung
     const channel = supabase
       .channel('schema-db-changes')
       .on(
         'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'antrean_rs',
-          filter: 'id=eq.1',
-        },
+        { event: 'UPDATE', schema: 'public', table: 'antrean_rs', filter: 'id=eq.1' },
         (payload) => {
-          console.log("Update Terdeteksi:", payload.new);
-          // Pastikan state diupdate sesuai kolom baru
           if (payload.new.nomor_sekarang) setNomor(payload.new.nomor_sekarang);
           
-          // Logika khusus untuk nomor_terlewat
-          const valTerlewat = payload.new.nomor_terlewat;
-          setTerlewat(valTerlewat && valTerlewat !== "" ? valTerlewat : "-");
+          // Sinkronisasi realtime list nomor terlewat
+          const listBaru = payload.new.nomor_terlewat;
+          setTerlewatList(Array.isArray(listBaru) ? listBaru : []);
         }
       )
-      .subscribe((status) => {
-        console.log("Status Realtime:", status);
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
 
+  // --- FUNGSI LOGIKA UNTUK SISI ADMIN ---
+  
+  // 1. Tombol PANGGIL BERIKUTNYA
+  const handlePanggilBerikutnya = async () => {
+    // Mengambil angka dari "A-01" -> 1, lalu ditambah 1 -> 2
+    const angkaSekarang = parseInt(nomor.split('-')[1]) || 0;
+    const angkaBaru = angkaSekarang + 1;
+    const nomorBaru = `A-${String(angkaBaru).padStart(2, '0')}`;
+
+    setNomor(nomorBaru);
+
+    // Update ke Supabase
+    await supabase
+      .from('antrean_rs')
+      .update({ nomor_sekarang: nomorBaru })
+      .eq('id', 1);
+  };
+
+  // 2. Tombol LEWATI (Kunci Sinkronisasi Array)
+  const handleLewati = async () => {
+    // Jika nomor sekarang sudah ada di list terlewat, jangan dimasukkan lagi
+    if (terlewatList.includes(nomor)) return;
+
+    const listTerlewatTerbaru = [...terlewatList, nomor];
+    setTerlewatList(listTerlewatTerbaru);
+
+    // Kirim utuh array baru ke Supabase agar monitor langsung update
+    const { error } = await supabase
+      .from('antrean_rs')
+      .update({ 
+        nomor_terlewat: listTerlewatTerbaru 
+      })
+      .eq('id', 1);
+
+    if (error) console.error("Gagal update nomor terlewat:", error.message);
+  };
+
+  // 3. Tombol RESET / BERSIHKAN ANTREAN
+  const handleReset = async () => {
+    setNomor("A-00");
+    setTerlewatList([]);
+
+    await supabase
+      .from('antrean_rs')
+      .update({ 
+        nomor_sekarang: "A-00", 
+        nomor_terlewat: [] 
+      })
+      .eq('id', 1);
+  };
+
+
+  // --- TAMPILAN SISI ADMIN ---
+  if (isAdmin) {
+    return (
+      <div style={styles.container}>
+        <header style={styles.header}>
+          <h2 style={styles.brand}>RAMA<span>HOSPITAL</span> (ADMIN)</h2>
+        </header>
+        <main style={{...styles.card, maxWidth: '400px'}}>
+          <p style={styles.label}>NOMOR SEKARANG</p>
+          <h1 style={styles.number}>{nomor}</h1>
+
+          <div style={{display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '20px'}}>
+            <button onClick={handlePanggilBerikutnya} style={styles.btnNext}>PANGGIL BERIKUTNYA</button>
+            <button onClick={handleLewati} style={styles.btnSkip}>LEWATI</button>
+          </div>
+
+          <button onClick={handleReset} style={styles.btnReset}>RESET ANTREAN</button>
+
+          <div style={{...styles.terlewatBox, marginTop: '20px', textAlign: 'left'}}>
+            <p style={styles.terlewatLabel}>PASIEN TERTUNDA (RE-CALL)</p>
+            <div style={styles.badgeContainer}>
+              {terlewatList.map((num, idx) => (
+                <span key={idx} style={styles.badgeTerlewat}>{num}</span>
+              ))}
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // --- TAMPILAN SISI WEB MONITOR LAYAR UTAMA (HP / PASIEN) ---
   return (
     <div style={styles.container}>
       <header style={styles.header}>
@@ -78,12 +157,20 @@ function App() {
         <p style={styles.label}>NOMOR SEKARANG</p>
         <h1 style={styles.number}>{loading ? "..." : nomor}</h1>
         
-        {/* Box Nomor Terlewat */}
+        {/* Box Nomor Terlewat Multi-Badge */}
         <div style={styles.terlewatBox}>
-          <p style={styles.terlewatLabel}>TERLEWAT</p>
-          <p style={styles.terlewatNumber}>
-            {loading ? "..." : terlewat}
-          </p>
+          <p style={styles.terlewatLabel}>TERLEWAT / RE-CALL</p>
+          <div style={styles.badgeContainer}>
+            {loading ? (
+              <p style={styles.terlewatNumber}>...</p>
+            ) : terlewatList.length > 0 ? (
+              terlewatList.map((num, index) => (
+                <span key={index} style={styles.badgeTerlewat}>{num}</span>
+              ))
+            ) : (
+              <span style={{ color: '#f43f5e', fontSize: '14px', opacity: 0.7 }}>- Tidak ada -</span>
+            )}
+          </div>
         </div>
 
         <div style={styles.statusBox}>
@@ -100,7 +187,7 @@ function App() {
   );
 }
 
-// Styles tetap sama seperti sebelumnya karena sudah bagus
+// STYLING CSS
 const styles = {
   container: {
     backgroundColor: '#0f172a',
@@ -129,14 +216,27 @@ const styles = {
   label: { fontSize: '14px', fontWeight: '600', color: '#94a3b8', marginBottom: '5px' },
   number: { fontSize: '80px', fontWeight: '900', margin: '0 0 10px 0', color: '#38bdf8' },
   terlewatBox: {
-    backgroundColor: 'rgba(244, 63, 94, 0.1)',
+    backgroundColor: 'rgba(244, 63, 94, 0.05)',
     padding: '15px',
     borderRadius: '15px',
     border: '1px dashed #f43f5e',
     marginBottom: '25px'
   },
-  terlewatLabel: { fontSize: '12px', fontWeight: 'bold', color: '#f43f5e', margin: '0 0 5px 0' },
-  terlewatNumber: { fontSize: '24px', fontWeight: '800', color: '#f43f5e', margin: 0 },
+  terlewatLabel: { fontSize: '12px', fontWeight: 'bold', color: '#f43f5e', margin: '0 0 10px 0', textAlign: 'center' },
+  badgeContainer: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: '8px'
+  },
+  badgeTerlewat: {
+    backgroundColor: '#f43f5e',
+    color: 'white',
+    padding: '4px 12px',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+  },
   statusBox: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' },
   statusText: { fontSize: '12px', color: '#38bdf8', fontWeight: '500' },
   pulse: {
@@ -146,7 +246,12 @@ const styles = {
     borderRadius: '50%',
     animation: 'pulse-animation 2s infinite'
   },
-  footer: { marginTop: '40px', textAlign: 'center', opacity: 0.7, fontSize: '14px' }
+  footer: { marginTop: '40px', textAlign: 'center', opacity: 0.7, fontSize: '14px' },
+  
+  // Tombol Admin Buttons
+  btnNext: { backgroundColor: '#38bdf8', color: '#0f172a', border: 'none', padding: '10px 15px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
+  btnSkip: { backgroundColor: '#eab308', color: '#0f172a', border: 'none', padding: '10px 15px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
+  btnReset: { backgroundColor: 'transparent', color: '#94a3b8', border: '1px solid #334155', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', marginTop: '10px' }
 };
 
 if (typeof document !== 'undefined') {
